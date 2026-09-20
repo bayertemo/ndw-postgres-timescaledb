@@ -1,0 +1,87 @@
+name: Docker Image CI
+
+on:
+  push:
+    branches: ['main']
+  pull_request:
+    branches: ['main']
+  # The image changes when PostgreSQL or TimescaleDB does, not when we do.
+  # A weekly build picks up base-image security patches without waiting for
+  # somebody to notice one — and fails loudly if a pinned package version has
+  # been withdrawn, which is how an unbuildable image is usually discovered
+  # months too late.
+  schedule:
+    - cron: '17 4 * * 1'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    # Writing to GHCR needs this; the default token is read-only.
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Only a push to main publishes. A pull request still builds, so a
+      # broken Dockerfile is caught before merge without pushing a tag
+      # nothing asked for.
+      #
+      # No secret is needed: GITHUB_TOKEN authenticates to the registry of
+      # the repository that owns the package.
+      - name: Log in to the registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          # The cluster is x86. Building on an arm64 developer machine
+          # produces an image the nodes cannot run, which is worth pinning
+          # here rather than discovering at rollout.
+          platforms: linux/amd64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: |
+            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/${{ github.repository }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # A database image that builds but cannot load its extension is worse
+      # than one that fails to build: the failure surfaces at a rolling
+      # restart of the primary instead of in CI. So the image is started and
+      # asked to do the thing it exists for.
+      - name: Verify the extension loads
+        run: |
+          docker build --platform linux/amd64 -t verify:local .
+          docker run --rm --platform linux/amd64 --user 0 \
+            --entrypoint bash verify:local -c '
+              set -e
+              export PGDATA=/tmp/d
+              mkdir -p $PGDATA && chown postgres $PGDATA
+              su postgres -c "initdb -D $PGDATA -A trust" > /dev/null
+              su postgres -c "pg_ctl -D $PGDATA -o \"-c shared_preload_libraries=timescaledb\" -w start" > /dev/null
+              su postgres -c "psql -tAc \"CREATE EXTENSION timescaledb\"" > /dev/null
+              echo "server:    $(su postgres -c "psql -tAc \"SHOW server_version\"")"
+              echo "extension: $(su postgres -c "psql -tAc \"SELECT extversion FROM pg_extension WHERE extname=\x27timescaledb\x27\"")"
+              LICENSE=$(su postgres -c "psql -tAc \"SHOW timescaledb.license\"")
+              echo "license:   $LICENSE"
+              # Community, not Apache. Both ship hypertables; only this one
+              # ships compression, which is the reason for the image.
+              test "$LICENSE" = "timescale"
+              su postgres -c "psql -tAc \"CREATE TABLE t(a timestamptz NOT NULL, b text)\"" > /dev/null
+              su postgres -c "psql -tAc \"SELECT create_hypertable(\x27t\x27,\x27a\x27)\"" > /dev/null
+              su postgres -c "psql -tAc \"ALTER TABLE t SET (timescaledb.compress)\"" > /dev/null
+              echo "hypertable and compression: ok"
+            '
