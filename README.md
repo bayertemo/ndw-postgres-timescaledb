@@ -20,11 +20,16 @@ metadata:
   name: example
 spec:
   instances: 3
-  imageName: ghcr.io/bayertemo/ndw-postgres-timescaledb:latest
+  imageName: ghcr.io/bayertemo/ndw-postgres-timescaledb:<commit-sha>
   postgresql:
     shared_preload_libraries:
       - timescaledb
 ```
+
+**Use a `<commit-sha>` tag, not `latest`** — CloudNativePG rejects a mutable
+tag outright (*"Can't use 'latest' as image tag as we can't detect upgrades"*),
+because it cannot tell an upgrade from a restart and so cannot sequence one
+safely.
 
 Then, in each database:
 
@@ -64,8 +69,10 @@ ghcr.io/bayertemo/ndw-postgres-timescaledb:latest
 ghcr.io/bayertemo/ndw-postgres-timescaledb:<commit-sha>
 ```
 
-`latest` follows `main`. Pin a `<commit-sha>` tag where a reproducible image is
-required.
+`latest` follows `main` and is there for `docker run`. CloudNativePG requires
+a `<commit-sha>` tag, and pinning one is what makes an image upgrade a
+deliberate, reviewable change rather than something that happens at the next
+restart.
 
 ## Notes
 
