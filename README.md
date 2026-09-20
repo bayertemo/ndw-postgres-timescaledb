@@ -1,64 +1,17 @@
-# PostgreSQL + TimescaleDB container images for CloudNativePG
+# postgres-timescaledb
 
-CloudNativePG operand images with the TimescaleDB extension installed, built
-so they can be used as a drop-in `imageName` in a CloudNativePG `Cluster`.
+**PostgreSQL with TimescaleDB, for CloudNativePG.** The official
+[CloudNativePG operand image](https://github.com/cloudnative-pg/postgres-containers)
+with [TimescaleDB](https://github.com/timescale/timescaledb) installed — a
+drop-in `imageName` for a `Cluster`, with nothing the operator relies on
+changed.
 
-These images are built **on top of** the official
-[CloudNativePG operand images](https://github.com/cloudnative-pg/postgres-containers),
-adding a single package. Everything the operator expects — its entrypoint,
-its instance manager, its backup and recovery hooks, the `postgres` UID — is
-inherited unchanged from the base.
+The **Community** edition is installed, not `-oss`, so compression, continuous
+aggregates and retention policies all work.
 
-## Supported tags
+## Quick start
 
-```
-ghcr.io/bayertemo/ndw-postgres-timescaledb:latest
-ghcr.io/bayertemo/ndw-postgres-timescaledb:<commit-sha>
-```
-
-| | |
-| --- | --- |
-| PostgreSQL | 17 (bookworm) |
-| TimescaleDB | 2.30.1 |
-| Edition | Community |
-| Platform | `linux/amd64` |
-
-`latest` follows `main`. Pin a `<commit-sha>` tag where a reproducible image
-is required.
-
-## Edition
-
-The **Community** edition is installed, not `-oss`.
-
-Both editions provide hypertables. Only Community provides compression,
-continuous aggregates and retention policies. `CREATE EXTENSION` succeeds
-under either, so an `-oss` package substituted by mistake is not otherwise
-visible; each build therefore asserts that `SHOW timescaledb.license` returns
-`timescale`.
-
-The Timescale License permits self-hosting without charge. It restricts
-offering TimescaleDB as a database-as-a-service to third parties.
-
-## PostgreSQL versions
-
-Bookworm-based images are used. The bullseye-based operand images are end of
-life: their Debian security pocket has moved to archive, and `apt-get install`
-inside them fails with 404 on packages the index still advertises, so no
-extension can be layered onto them.
-
-Bookworm builds track the current PostgreSQL patch release. The
-`17.2-N-bookworm` tags identify the image build rather than the server
-version, so a bookworm image pinned to an older patch is not available.
-
-> **NOTE:** TimescaleDB advises against PostgreSQL 17.1, 16.5, 15.9, 14.14,
-> 13.17 and 12.21, which introduced a breaking binary interface change that
-> was reverted in the following patch releases.
-
-## Usage
-
-`timescaledb` must be present in `shared_preload_libraries`. Declare it in the
-`Cluster` spec rather than in the image: CloudNativePG manages
-`postgresql.conf` and regenerates it from the spec on every reconciliation.
+Point a `Cluster` at it and preload the library:
 
 ```yaml
 apiVersion: postgresql.cnpg.io/v1
@@ -79,48 +32,93 @@ Then, in each database:
 CREATE EXTENSION timescaledb;
 ```
 
-The package is public; no `imagePullSecret` is required.
+That's it — the package is public, so there is no `imagePullSecret` to create.
+Everything below is reference detail.
 
-> **IMPORTANT:** Changing `imageName` on a running cluster triggers a rolling
-> restart, ending in a switchover of the primary. Reverting is possible until
-> the first hypertable is created; after that, an image without the extension
-> cannot read the data. PostgreSQL does not support downgrading a patch
-> release in place.
+## Why you might want this
 
-## Building images
+- **Drop-in for CloudNativePG** — built on the operand image, so the
+  entrypoint, instance manager, backup and recovery hooks and `postgres` UID
+  are the ones the operator expects. No `postgresUID`/`postgresGID` overrides.
+- **Community edition, verified** — every build asserts
+  `SHOW timescaledb.license` returns `timescale`. `CREATE EXTENSION` succeeds
+  under `-oss` too, so nothing else would notice the difference until you tried
+  to compress something.
+- **Public, so no pull secret** — a registry credential that expires is a
+  database that will not start the next time a pod is rescheduled.
+- **Proven before it ships** — CI boots the image and creates the extension, a
+  hypertable and a compressed table before publishing. An image that builds but
+  cannot load its extension otherwise fails at a rolling restart of a primary.
 
-```sh
-docker build --platform linux/amd64 \
-  --build-arg PG_MAJOR=17 \
-  --build-arg TIMESCALE_VERSION=2.30.1 \
-  --build-arg PG_IMAGE=ghcr.io/cloudnative-pg/postgresql:17-bookworm \
-  -t ndw-postgres-timescaledb .
+## What's in it
+
+| | |
+|---|---|
+| PostgreSQL | 17 (bookworm) |
+| TimescaleDB | 2.30.1, Community |
+| Base | `ghcr.io/cloudnative-pg/postgresql:17-bookworm` |
+| Platform | `linux/amd64` |
+
+```
+ghcr.io/bayertemo/ndw-postgres-timescaledb:latest
+ghcr.io/bayertemo/ndw-postgres-timescaledb:<commit-sha>
 ```
 
-All three are build arguments, so other pairings can be built without editing
-the Dockerfile. The TimescaleDB version must support the PostgreSQL major
-version in the base image.
+`latest` follows `main`. Pin a `<commit-sha>` tag where a reproducible image is
+required.
 
-Images are built and published on every push to `main`, built without
-publishing on pull requests, and rebuilt weekly to pick up base image updates.
-Each build starts the resulting image and verifies that the extension loads,
-a hypertable can be created, compression can be enabled, and the edition is
-Community.
+## Notes
 
-## License and copyright
+- **`shared_preload_libraries` belongs in the `Cluster`, not the image.**
+  CloudNativePG owns `postgresql.conf` and regenerates it from the spec on
+  every reconciliation, so a line baked into the image is erased. This is the
+  first thing to check when `CREATE EXTENSION` fails.
+- **Bookworm, not bullseye.** The bullseye-based operand images are end of
+  life: their Debian security pocket has moved to archive, so `apt-get install`
+  inside one fails with 404s on packages the index still advertises — no
+  extension can be layered onto them at all. Bookworm builds track the current
+  PostgreSQL patch release, and the `17.2-N-bookworm` tags name the image build
+  rather than the server, so a bookworm image pinned to an older patch does not
+  exist.
+- **Mind the patch version when upgrading.** TimescaleDB advises against
+  PostgreSQL 17.1, 16.5, 15.9, 14.14, 13.17 and 12.21, which shipped a breaking
+  binary interface change that was reverted in the following patch releases.
+- **Switching a running cluster is close to one-way.** Changing `imageName`
+  triggers a rolling restart ending in a switchover of the primary. Reverting
+  works until the first hypertable exists; after that an image without the
+  extension cannot read the data, and PostgreSQL does not downgrade a patch
+  release in place either.
+- **Versions are build args**, so another pairing needs no edit to the
+  Dockerfile — though the TimescaleDB version must support the PostgreSQL major
+  in the base image:
 
-The contents of this repository are distributed under the Apache License 2.0.
+  ```bash
+  docker build --platform linux/amd64 \
+    --build-arg PG_MAJOR=17 \
+    --build-arg TIMESCALE_VERSION=2.30.1 \
+    --build-arg PG_IMAGE=ghcr.io/cloudnative-pg/postgresql:17-bookworm .
+  ```
 
-The images include software distributed under its own terms:
+- CI builds and publishes on every push to `main`, builds without publishing on
+  pull requests, and rebuilds weekly to pick up base image updates — which also
+  fails loudly if a pinned package has been withdrawn.
 
-- PostgreSQL — [PostgreSQL License](https://www.postgresql.org/about/licence/)
-- TimescaleDB — [Timescale License](https://github.com/timescale/timescaledb/blob/main/tsl/LICENSE-TIMESCALE)
-- CloudNativePG operand images — [Apache License 2.0](https://github.com/cloudnative-pg/postgres-containers/blob/main/LICENSE)
+## License
 
-## Trademarks
+The wrapper is provided as-is. PostgreSQL is under the
+[PostgreSQL License](https://www.postgresql.org/about/licence/); the
+CloudNativePG operand images are **Apache-2.0**; TimescaleDB's Community
+features are under the
+[**Timescale License**](https://github.com/timescale/timescaledb/blob/main/tsl/LICENSE-TIMESCALE),
+which permits self-hosting free of charge and restricts offering TimescaleDB as
+a database-as-a-service to third parties.
 
-*Postgres* and *PostgreSQL* are trademarks or registered trademarks of the
-PostgreSQL Community Association of Canada, and used with their permission.
-*Timescale* and *TimescaleDB* are trademarks of Timescale, Inc. *CloudNativePG*
-is a trademark of The CloudNativePG Contributors. This project is not
-affiliated with, endorsed by, or sponsored by any of them.
+*Postgres* and *PostgreSQL* are trademarks of the PostgreSQL Community
+Association of Canada. *Timescale* and *TimescaleDB* are trademarks of
+Timescale, Inc. *CloudNativePG* is a trademark of The CloudNativePG
+Contributors. This project is not affiliated with, endorsed by, or sponsored by
+any of them.
+
+---
+
+<sub>Crafted with care by [ndw.ai](https://ndw.ai/)</sub>
