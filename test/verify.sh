@@ -25,8 +25,23 @@ su postgres -c "pg_ctl -D $PGDATA -o '-c shared_preload_libraries=timescaledb' -
 
 run "CREATE EXTENSION timescaledb" > /dev/null
 
-echo "server:    $(run 'SHOW server_version')"
-echo "extension: $(run "SELECT extversion FROM pg_extension WHERE extname = 'timescaledb'")"
+server=$(run 'SHOW server_version' | cut -d' ' -f1)
+extension=$(run "SELECT extversion FROM pg_extension WHERE extname = 'timescaledb'")
+echo "server:    $server"
+echo "extension: $extension"
+
+# The published tags name these versions, and a tag that names a version the
+# image does not contain is worse than no tag at all: CloudNativePG reads the
+# tag to decide whether it is being asked to upgrade, so a wrong one can start
+# a pg_upgrade against a server that never changed.
+if [ -n "${EXPECT_PG:-}" ] && [ "$server" != "$EXPECT_PG" ]; then
+  echo "image has PostgreSQL $server but the tags would claim $EXPECT_PG" >&2
+  exit 1
+fi
+if [ -n "${EXPECT_TS:-}" ] && [ "$extension" != "$EXPECT_TS" ]; then
+  echo "image has TimescaleDB $extension but the tags would claim $EXPECT_TS" >&2
+  exit 1
+fi
 
 # Community, not Apache. Both provide hypertables; only Community provides
 # compression, and CREATE EXTENSION succeeds under either — so nothing above

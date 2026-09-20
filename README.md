@@ -20,16 +20,19 @@ metadata:
   name: example
 spec:
   instances: 3
-  imageName: ghcr.io/bayertemo/ndw-postgres-timescaledb:<commit-sha>
+  imageName: ghcr.io/bayertemo/ndw-postgres-timescaledb:17.11-ts2.30.1
   postgresql:
     shared_preload_libraries:
       - timescaledb
 ```
 
-**Use a `<commit-sha>` tag, not `latest`** — CloudNativePG rejects a mutable
-tag outright (*"Can't use 'latest' as image tag as we can't detect upgrades"*),
-because it cannot tell an upgrade from a restart and so cannot sequence one
-safely.
+> **IMPORTANT:** use the version tag. CloudNativePG derives the PostgreSQL
+> major version from the tag string — it rejects `latest` outright (*"Can't
+> use 'latest' as image tag as we can't detect upgrades"*), and it reads the
+> leading digits of whatever else it is given as a version number. A commit
+> SHA beginning with digits is therefore parsed as a version: pinning
+> `989820a6…` makes the operator believe it is being asked to upgrade to major
+> version 989820, and it will start a `pg_upgrade` to get there.
 
 Then, in each database:
 
@@ -65,14 +68,13 @@ Everything below is reference detail.
 | Platform | `linux/amd64` |
 
 ```
+ghcr.io/bayertemo/ndw-postgres-timescaledb:17.11-ts2.30.1
+ghcr.io/bayertemo/ndw-postgres-timescaledb:17.11
 ghcr.io/bayertemo/ndw-postgres-timescaledb:latest
-ghcr.io/bayertemo/ndw-postgres-timescaledb:<commit-sha>
 ```
 
-`latest` follows `main` and is there for `docker run`. CloudNativePG requires
-a `<commit-sha>` tag, and pinning one is what makes an image upgrade a
-deliberate, reviewable change rather than something that happens at the next
-restart.
+The version tags are the ones to use with CloudNativePG, for the reason above.
+`latest` follows `main` and is there for `docker run`.
 
 ## Notes
 

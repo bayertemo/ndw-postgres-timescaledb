@@ -14,6 +14,13 @@ on:
     - cron: '17 4 * * 1'
   workflow_dispatch:
 
+env:
+  # What the image actually contains. Read back out of the built image below
+  # rather than trusted, so a tag can never claim a version the image does
+  # not have.
+  PG_VERSION: '17.11'
+  TS_VERSION: '2.30.1'
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -63,6 +70,7 @@ jobs:
         run: |
           docker run --rm --platform linux/amd64 --user 0 \
             -v "$PWD/test/verify.sh:/verify.sh:ro" \
+            -e EXPECT_PG="$PG_VERSION" -e EXPECT_TS="$TS_VERSION" \
             --entrypoint bash verify:local /verify.sh
 
       - name: Build and push
@@ -71,9 +79,17 @@ jobs:
           context: .
           platforms: linux/amd64
           push: ${{ github.event_name != 'pull_request' }}
+          # Version tags, because CloudNativePG reads the tag as a
+          # PostgreSQL version: it refuses `latest`, and parses the leading
+          # digits of anything else as a major version — a commit SHA
+          # beginning with digits makes it attempt a pg_upgrade to that
+          # "version". The SHA tag stays for provenance; it must not be used
+          # in a Cluster.
           tags: |
+            ghcr.io/${{ github.repository }}:${{ env.PG_VERSION }}-ts${{ env.TS_VERSION }}
+            ghcr.io/${{ github.repository }}:${{ env.PG_VERSION }}
             ghcr.io/${{ github.repository }}:latest
-            ghcr.io/${{ github.repository }}:${{ github.sha }}
+            ghcr.io/${{ github.repository }}:sha-${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
